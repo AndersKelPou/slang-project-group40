@@ -68,12 +68,12 @@ impl slang_ui::Hook for App {
 // Encoding of (assert-only) statements into IVL (for programs comprised of only
 // a single assertion)
 fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
-    //println!("cmd to ivlcmd {:#?}", &cmd.kind);
+    println!("cmd to ivlcmd {:#?}", &cmd.kind);
     match &cmd.kind {
-        CmdKind::Assert { condition, .. } => Ok(IVLCmd::assert(condition, "Assert might fail!")),
-        CmdKind::Seq(cmd1, cmd2) => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
-        //CmdKind::Return { expr } => Ok(IVLCmd::)
-        CmdKind::Assignment { name, expr } => Ok(IVLCmd::assign(name, expr)),
+        CmdKind::Assert         { condition, .. }   => Ok(IVLCmd::assert(condition, "Assert might fail!")),
+        CmdKind::Seq            (cmd1, cmd2)        => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
+        CmdKind::VarDefinition  { name, ty, expr }  => Ok(IVLCmd::vardef(name, ty, expr)),
+        CmdKind::Assignment     { name, expr }      => Ok(IVLCmd::assign(name, expr)),
         _ => todo!(" Not supported (yet)."),
     }
 }
