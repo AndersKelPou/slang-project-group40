@@ -2,7 +2,7 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, Op, Ident};
+use slang::ast::{Cmd, CmdKind, Expr, Op};
 use slang_ui::prelude::*;
 
 pub struct App;
@@ -68,12 +68,14 @@ impl slang_ui::Hook for App {
 // Encoding of (assert-only) statements into IVL (for programs comprised of only
 // a single assertion)
 fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
-    println!("cmd to ivlcmd {:#?}", &cmd.kind);
+    //println!("cmd to ivlcmd {:#?}", &cmd.kind);
     match &cmd.kind {
-        CmdKind::Assert         { condition, .. }   => Ok(IVLCmd::assert(condition, "Assert might fail!")),
-        CmdKind::Seq            (cmd1, cmd2)        => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
-        CmdKind::VarDefinition  { name, ty, expr }  => Ok(IVLCmd::vardef(name, ty, expr)),
-        CmdKind::Assignment     { name, expr }      => Ok(IVLCmd::assign(name, expr)),
+        CmdKind::Assert         { condition, .. }               => Ok(IVLCmd::assert(condition, "Assert might fail!")),
+        CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
+        CmdKind::VarDefinition  { name, ty, expr }              => Ok(IVLCmd::vardef(name, ty, expr)),
+        CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
+        CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
+        CmdKind::Loop           { invariants, variant, body}    => Ok(IVLCmd::_loop(invariants, variant, body)),
         _ => todo!(" Not supported (yet)."),
     }
 }
@@ -83,11 +85,20 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
 fn wp(ivl: &IVLCmd, expr_in: &Expr) -> Result<(Expr, String)> {
     //println!("Finding WP of {:#?} with expr: {:#?}", &ivl.kind, &expr_in.kind);
     match &ivl.kind {
-        IVLCmdKind::Assert { condition, message } => Ok((Expr::op(&condition.clone(), Op::And, &expr_in), message.clone())),
-        IVLCmdKind::Seq(cmd1, cmd2) => {let (expr2, msg2) = wp(cmd2, expr_in)?;
-                                        let (expr1, msg1) = wp(cmd1, &expr2)?;
-                                        Ok((expr1,  msg1 ))}, // should not be just msg1
-        IVLCmdKind::Assignment { name, expr } => Ok((expr_in.clone().subst(|x| x.is_ident(&name.ident), expr), name.to_string())),//expr_in[var -> expr]
+        IVLCmdKind::Assert { condition, message }       => Ok((Expr::op(&condition.clone(), Op::And, &expr_in), message.clone())),
+        IVLCmdKind::Assume { condition }                => Ok((Expr::op(&condition.clone(), Op::Imp, &expr_in), "Assume might not fail".to_string())),
+        IVLCmdKind::Seq(cmd1, cmd2)                     => {let (expr2, msg2) = wp(cmd2, expr_in)?;
+                                                            let (expr1, msg1) = wp(cmd1, &expr2)?;
+                                                            Ok((expr1,  msg2 ))}, // should not be just msg1
+        IVLCmdKind::Assignment { name, expr }           => Ok((expr_in.clone().subst(|x| x.is_ident(&name.ident), expr), name.to_string())),//expr_in[var -> expr]
+        IVLCmdKind::VarDefinition { name, expr, .. }    => {if let Some(expr) = expr {Ok((expr_in.clone().subst(|x| x.is_ident(&name.ident), expr), name.to_string()))} // has expr 
+                                                            else {Ok((expr_in.clone(), "All good(not)".to_string()))}}, // doesn't have expr
+        IVLCmdKind::Loop {invariants, variant, cases}    => { let mut precondition = Expr::bool(true);
+                                                            for invariant in invariants.iter() {
+                                                                precondition = Expr::op(&invariant.clone(), Op::And, &precondition);
+                                                            };
+                                                            Ok((precondition.clone(), "Something wrong with the Loop yo".to_string()))// i && expr_in
+                                                            },
         _ => todo!("Not supported (yet)."),
     }
 }

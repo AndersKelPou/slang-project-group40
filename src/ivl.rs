@@ -1,5 +1,5 @@
 use slang::{
-    ast::{Expr, Name, Type},
+    ast::{Expr, Name, Type, Cases},
     Span,
 };
 use slang_ui::prelude::*;
@@ -19,6 +19,8 @@ pub enum IVLCmdKind {
 
     Assume { condition: Expr },
     Assert { condition: Expr, message: String },
+    
+    Loop { invariants: Vec<Expr>, variant: Option<Expr>, cases: Cases},
 
     Seq(Box<IVLCmd>, Box<IVLCmd>),
     NonDet(Box<IVLCmd>, Box<IVLCmd>),

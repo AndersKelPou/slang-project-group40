@@ -1,5 +1,5 @@
 use slang::{
-    ast::{Expr, Name, Type},
+    ast::{Expr, Name, Type, Cases},
     Span,
 };
 use slang_ui::prelude::*;
@@ -13,12 +13,7 @@ impl IVLCmd {
             kind,
         }
     }
-    pub fn vardef(name: &Name, ty: &(Span, Type), expr: &Option<Expr>) -> IVLCmd { //expr: &Option<Expr>
-        // new_expr = match expr {
-        //     Some(expr) => Some(expr.clone()),
-        //     None => None,
-        // };
-
+    pub fn vardef(name: &Name, ty: &(Span, Type), expr: &Option<Expr>) -> IVLCmd {
         IVLCmd::new(IVLCmdKind::VarDefinition {
             name: name.clone(),
             ty: (Span::default(), ty.1.clone()),
@@ -38,6 +33,16 @@ impl IVLCmd {
         IVLCmd {
             span: Span::default(),
             kind: IVLCmdKind::Seq(Box::new(self.clone()), Box::new(other.clone())),
+        }
+    }
+    pub fn _loop(invariants: &Vec<Expr>, variant: &Option<Expr>, cases: &Cases) -> IVLCmd {
+        IVLCmd {
+            span: Span::default(),
+            kind: IVLCmdKind::Loop {
+                invariants: invariants.to_vec(),
+                variant: variant.clone(), 
+                cases: cases.clone(),
+            }
         }
     }
     pub fn seqs(cmds: &[IVLCmd]) -> IVLCmd {
@@ -119,6 +124,7 @@ impl std::fmt::Display for IVLCmd {
             IVLCmdKind::Assert { condition, .. } => write!(f, "assert {condition}"),
             IVLCmdKind::Seq(c1, c2) => write!(f, "{c1} ; {c2}"),
             IVLCmdKind::NonDet(c1, c2) => write!(f, "{{ {c1} }} [] {{ {c2} }}"),
+            IVLCmdKind::Loop {invariants, variant, cases} => write!(f, "loop {{ }}"),
         }
     }
 }
