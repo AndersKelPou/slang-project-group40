@@ -7,22 +7,9 @@ use slang_ui::prelude::*;
 use crate::ivl::{IVLCmd, IVLCmdKind};
 
 impl IVLCmd {
-    pub fn new(kind: IVLCmdKind) -> IVLCmd {
-        IVLCmd {
-            span: kind.infer_span().unwrap_or_default(),
-            kind,
-        }
-    }
-    pub fn vardef(name: &Name, ty: &(Span, Type), expr: &Option<Expr>) -> IVLCmd {
-        IVLCmd::new(IVLCmdKind::VarDefinition {
-            name: name.clone(),
-            ty: (Span::default(), ty.1.clone()),
-            expr: expr.clone(),
-        })
-    }
     pub fn assign(name: &Name, expr: &Expr) -> IVLCmd {
         IVLCmd {
-            span: Span::default(),
+            span: expr.span,
             kind: IVLCmdKind::Assignment {
                 name: name.clone(),
                 expr: expr.clone(),
@@ -31,7 +18,7 @@ impl IVLCmd {
     }
     pub fn seq(&self, other: &IVLCmd) -> IVLCmd {
         IVLCmd {
-            span: Span::default(),
+            span: Span::union(self.span, other.span),
             kind: IVLCmdKind::Seq(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
@@ -47,7 +34,7 @@ impl IVLCmd {
     }
     pub fn _match(body: &Cases) -> IVLCmd {
         IVLCmd {
-            span: Span::default(),
+            span: body.span,
             kind: IVLCmdKind::Match {
                 body: body.clone(),
             }
@@ -60,10 +47,19 @@ impl IVLCmd {
             .unwrap_or(IVLCmd::nop())
     }
     pub fn _return(expr: &Option<Expr>) -> IVLCmd {
-        IVLCmd {
-            span: Span::default(),
-            kind: IVLCmdKind::Return {
-                expr: expr.clone(),
+        if let Some(acc_expr) = expr {
+            IVLCmd {
+                span: acc_expr.span,
+                kind: IVLCmdKind::Return {
+                    expr: expr.clone(),
+                }
+            }
+        } else {
+            IVLCmd {
+                span: Span::default(),
+                kind: IVLCmdKind::Return {
+                    expr: expr.clone(),
+                }
             }
         }
     }
@@ -81,7 +77,7 @@ impl IVLCmd {
     }
     pub fn assume(condition: &Expr) -> IVLCmd {
         IVLCmd {
-            span: Span::default(),
+            span: condition.span,
             kind: IVLCmdKind::Assume {
                 condition: condition.clone(),
             },
@@ -89,7 +85,7 @@ impl IVLCmd {
     }
     pub fn assert(condition: &Expr, message: &str) -> IVLCmd {
         IVLCmd {
-            span: Span::default(),
+            span: condition.span,
             kind: IVLCmdKind::Assert {
                 condition: condition.clone(),
                 message: message.to_owned(),
@@ -112,28 +108,10 @@ impl IVLCmd {
         IVLCmd::assume(&Expr::bool(false))
     }
 }
-impl IVLCmdKind {
-    fn infer_span(&self) -> Option<Span> {
-        Some(match self {
-            IVLCmdKind::VarDefinition { name, ty, expr } => {
-                let type_span = ty.0;
-                if let Some(expr) = expr {
-                    name.span.union(type_span).union(expr.span)
-                } else {
-                    name.span.union(type_span)
-                }
-            }
-            _ => todo!("Not supported (yet)."),
-        }
-    )
-    }
-}
 
 impl std::fmt::Display for IVLCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            IVLCmdKind::VarDefinition { name, ty, expr } => {if let Some(expr) = expr {write!(f, "Var {name} : {0} := {expr}", ty.1)} 
-                                                            else {write!(f, "Var {name} : {0}", ty.1)}},
             IVLCmdKind::Assignment { name, expr } => write!(f, "{name} := {expr}"),
             IVLCmdKind::Havoc { name, .. } => write!(f, "havoc {name}"),
             IVLCmdKind::Assume { condition } => write!(f, "assume {condition}"),

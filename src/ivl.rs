@@ -12,7 +12,6 @@ pub struct IVLCmd {
 
 #[derive(Debug, Clone)]
 pub enum IVLCmdKind {
-    VarDefinition {name: Name, ty: (Span, Type), expr: Option<Expr>},
     Assignment { name: Name, expr: Expr },
     Havoc { name: Name, ty: Type },
 
