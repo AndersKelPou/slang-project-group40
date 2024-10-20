@@ -45,11 +45,27 @@ impl IVLCmd {
             }
         }
     }
+    pub fn _match(body: &Cases) -> IVLCmd {
+        IVLCmd {
+            span: Span::default(),
+            kind: IVLCmdKind::Match {
+                body: body.clone(),
+            }
+        }
+    }
     pub fn seqs(cmds: &[IVLCmd]) -> IVLCmd {
         cmds.iter()
             .cloned()
             .reduce(|a, b| IVLCmd::seq(&a, &b))
             .unwrap_or(IVLCmd::nop())
+    }
+    pub fn _return(expr: &Option<Expr>) -> IVLCmd {
+        IVLCmd {
+            span: Span::default(),
+            kind: IVLCmdKind::Return {
+                expr: expr.clone(),
+            }
+        }
     }
     pub fn nondet(&self, other: &IVLCmd) -> IVLCmd {
         IVLCmd {
@@ -122,9 +138,13 @@ impl std::fmt::Display for IVLCmd {
             IVLCmdKind::Havoc { name, .. } => write!(f, "havoc {name}"),
             IVLCmdKind::Assume { condition } => write!(f, "assume {condition}"),
             IVLCmdKind::Assert { condition, .. } => write!(f, "assert {condition}"),
+            //ENSURES
+            //REQUIRES
             IVLCmdKind::Seq(c1, c2) => write!(f, "{c1} ; {c2}"),
             IVLCmdKind::NonDet(c1, c2) => write!(f, "{{ {c1} }} [] {{ {c2} }}"),
             IVLCmdKind::Loop {invariants, variant, cases} => write!(f, "loop {{ }}"),
+            IVLCmdKind::Match {body} => write!(f, "match {{ }}"),
+            IVLCmdKind::Return {expr} => {if let Some(expr) = expr {write!(f, "return {expr}")} else {write!(f, "returned nothing")}}
         }
     }
 }

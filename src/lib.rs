@@ -76,6 +76,8 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
         CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
         CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
         CmdKind::Loop           { invariants, variant, body}    => Ok(IVLCmd::_loop(invariants, variant, body)),
+        CmdKind::Match          { body }                        => Ok(IVLCmd::_match(body)),
+        CmdKind::Return         { expr }                        => Ok(IVLCmd::_return(expr)),
         _ => todo!(" Not supported (yet)."),
     }
 }
@@ -87,9 +89,16 @@ fn wp(ivl: &IVLCmd, expr_in: &Expr) -> Result<(Expr, String)> {
     match &ivl.kind {
         IVLCmdKind::Assert { condition, message }       => Ok((Expr::op(&condition.clone(), Op::And, &expr_in), message.clone())),
         IVLCmdKind::Assume { condition }                => Ok((Expr::op(&condition.clone(), Op::Imp, &expr_in), "Assume might not fail".to_string())),
-        IVLCmdKind::Seq(cmd1, cmd2)                     => {let (expr2, msg2) = wp(cmd2, expr_in)?;
-                                                            let (expr1, msg1) = wp(cmd1, &expr2)?;
-                                                            Ok((expr1,  msg2 ))}, // should not be just msg1
+        IVLCmdKind::Seq(cmd1, cmd2)                     => { if !matches!(cmd1.kind, IVLCmdKind::Return{..}) {
+                                                                let (expr2, msg2) = wp(cmd2, expr_in)?;
+                                                                let (expr1, msg1) = wp(cmd1, &expr2)?;
+                                                                Ok((expr1,  msg2))
+                                                            } else {
+                                                                Ok((Expr::bool(false),  "Jeg er dum og mit return er ikke til sidst".to_string()))
+                                                            }
+                                                            } // should not be just msg1
+                                                            //TODO: RETURN HAS TO BE LAST EXPR IF METHOD HAS RETURN
+
         IVLCmdKind::Assignment { name, expr }           => Ok((expr_in.clone().subst(|x| x.is_ident(&name.ident), expr), name.to_string())),//expr_in[var -> expr]
         IVLCmdKind::VarDefinition { name, expr, .. }    => {if let Some(expr) = expr {Ok((expr_in.clone().subst(|x| x.is_ident(&name.ident), expr), name.to_string()))} // has expr 
                                                             else {Ok((expr_in.clone(), "All good(not)".to_string()))}}, // doesn't have expr
@@ -99,6 +108,24 @@ fn wp(ivl: &IVLCmd, expr_in: &Expr) -> Result<(Expr, String)> {
                                                             };
                                                             Ok((precondition.clone(), "Something wrong with the Loop yo".to_string()))// i && expr_in
                                                             },
+        IVLCmdKind::Match { body } => { let mut precondition = Expr::bool(true);
+                                        let mut _message ="No cases found".to_string();
+                                        for case in body.cases.iter() {
+                                            let (wp_case, msg_case) = wp(&cmd_to_ivlcmd(&case.cmd)?, expr_in)?;
+
+                                            let implication = Expr::op(&case.condition, Op::Imp, &wp_case);
+                                            
+                                            precondition = Expr::op(&implication.clone(), Op::And, &precondition);
+                                            _message = msg_case; //Always gets last error message
+                                        }
+                                        Ok((precondition.clone(), _message))
+                                        },
+        IVLCmdKind::Return { expr }      => { let mut _message  = "".to_string();
+                                            if let Some(expr) = expr {_message = ["Failed in returning expression:", (&expr.to_string())].join(" ")} 
+                                            else {_message = "Failed returning".to_string();}
+                                            Ok((expr_in.clone(), _message.to_string()))
+                                            }, 
+        
         _ => todo!("Not supported (yet)."),
     }
 }
