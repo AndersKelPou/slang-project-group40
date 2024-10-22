@@ -44,8 +44,8 @@ impl slang_ui::Hook for App {
             
             // Calculate obligation and error message (if obligation is not
             // verified)
-            println!("cmd {:#?}", &cmd);
-            println!("ivl {:#?}", &ivl);
+            //println!("cmd {:#?}", &cmd);
+            //println!("ivl {:#?}", &ivl);
             
             let (oblig, msg) = wp(&ivl, &post)?;
             //println!("Span {:#?}", Span::default());
@@ -95,7 +95,12 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
         CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
         CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
         CmdKind::Loop           { invariants, variant, body}    => Ok(IVLCmd::_loop(invariants, variant, body)),
-        CmdKind::Match          { body }                        => Ok(IVLCmd::_match(body)),
+        CmdKind::Match          { body }                        => {    let mut cases = Vec::new();
+                                                                        for i in 0..body.cases.len() {
+                                                                            cases.push(cmd_to_ivlcmd(&Cmd::seq(&Cmd::assume(&body.cases[i].condition), &body.cases[i].cmd))?);
+                                                                        }
+                                                                        Ok(IVLCmd::nondets(&cases))
+                                                                    }
         CmdKind::Return         { expr }                        => Ok(IVLCmd::_return(expr)),
         _ => todo!(" Not supported (yet)."),
     }
@@ -131,17 +136,9 @@ fn wp(ivl: &IVLCmd, post: &Expr) -> Result<(Expr, String)> {
                                                             };
                                                             Ok((precondition.clone(), "Something wrong with the Loop yo".to_string()))// i && post
                                                             },
-        IVLCmdKind::Match { body }                      => {let mut precondition = Expr::bool(true);
-                                                            let mut _message ="No cases found".to_string();
-                                                            for case in body.cases.iter() {
-                                                                let (wp_case, msg_case) = wp(&cmd_to_ivlcmd(&case.cmd)?, post)?;
-
-                                                                let implication = case.condition.imp(&wp_case);
-                                                                
-                                                                precondition = implication.clone().and(&precondition);
-                                                                _message = msg_case; //Always gets last error message
-                                                            }
-                                                            Ok((precondition.clone(), _message))
+        IVLCmdKind::NonDet( cmd1, cmd2 )                => {let (expr0, msg0) = wp(cmd1, post)?;
+                                                            let (expr1, msg1) = wp(cmd2, post)?;
+                                                            Ok((expr0.clone().and(&expr1), msg0))
                                                             },
         IVLCmdKind::Return { expr }                     => {if let Some(expr) = expr {
                                                                 let _message = ["Failed in returning expression: ", (&expr.to_string())].join("");
