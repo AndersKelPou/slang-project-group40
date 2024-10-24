@@ -37,20 +37,29 @@ impl slang_ui::Hook for App {
             // Get method's postconditions;
             let posts = m.ensures();
             // Merge them into a single condition
-            let post = posts
+            let mut post: Vec<(Expr, String)> = posts
+                .cloned()
+                .map(|expr| (expr, ["Error ensuring the property ".to_string(), "Hello".to_string()].join("")))
+                .collect();
+                
+            if post.is_empty() {
+                post.push((Expr::bool(true), "Default post condition".to_string()));
+            }
+            /*let post = posts
                 .cloned()
                 .reduce(|a, b| a & b)
-                .unwrap_or(Expr::bool(true));
-            
+                .unwrap_or(Expr::bool(true));*/
+            println!("posts {:#?} ", post);
             // Calculate obligation and error message (if obligation is not
             // verified)
             //println!("cmd {:#?}", &cmd);
             //println!("ivl {:#?}", &ivl);
             
-            let oblig = swp(&ivl, vec![(post, "Error in ensures ".to_string())])?;
+            let oblig = swp(&ivl, post)?;
             //println!("Span {:#?}", Span::default());
             //println!("oblig {:#?}", &oblig);
             // Convert obligation to SMT expression
+            println!("Out vec {:#?}", oblig);
 
             // Run the following solver-related statements in a closed scope.
             // That is, after exiting the scope, all assertions are forgotten
@@ -61,7 +70,7 @@ impl slang_ui::Hook for App {
             for i in 0..oblig.len() {
                 solver.scope(|solver| {
                     let mut or_oblig = Expr::bool(false);
-                    let mut last_obl = Expr::bool(false); let mut last_msg = "".to_string();
+                    let mut last_obl = Expr::bool(false); let mut last_msg = String::new();
                     for (obl, msg) in oblig[0..i+1].iter() {
                         or_oblig = or_oblig.or(&obl.prefix(PrefixOp::Not));
                         last_obl = obl.clone();
@@ -83,7 +92,7 @@ impl slang_ui::Hook for App {
                             smtlib::SatResult::Unsat => (),
                         }
                     } else { // Er Ok() altid en success? eller kan det også være en error? forstår det ikke (seriøst), det kan ikke være en error hvis det er Ok()
-                        println!("{:#?}", or_oblig);
+                        println!("Failed with {:#?}", or_oblig);
                         todo!("Smt failed to generate(somehow???????)")
                     }
                     // Check validity of obligation
@@ -179,7 +188,7 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                                 let mut new_post = Vec::new();
                                                                 for (post_expr, msg) in post.iter() { 
                                                                     let _message = ["Failed in returning expression: ", (&acc_expr.to_string())].join("");
-                                                                    new_post.push((acc_expr.clone().subst(|x| matches!(x.kind, ExprKind::Result{..}), post_expr).clone(), _message.to_string()));
+                                                                    new_post.push((post_expr.clone().subst(|x| matches!(x.kind, ExprKind::Result{..}), acc_expr).clone(), _message.to_string()));
                                                                 }
                                                                 Ok(new_post)
                                                             } else { Ok(post) }
