@@ -39,23 +39,35 @@ impl slang_ui::Hook for App {
             // Merge them into a single condition
             let mut post: Vec<(Expr, String)> = posts
                 .cloned()
-                .map(|expr| (expr, ["Error ensuring the property ".to_string(), "Hello".to_string()].join("")))
+                .map(|expr| (
+                    expr.clone(),
+                    format!("Error ensuring the property {}", expr),
+                ))
                 .collect();
                 
             if post.is_empty() {
                 post.push((Expr::bool(true), "Default post condition".to_string()));
             }
-            /*let post = posts
-                .cloned()
-                .reduce(|a, b| a & b)
-                .unwrap_or(Expr::bool(true));*/
-            println!("posts {:#?} ", post);
+            /*fn adjust_span(mut expr: Expr) -> Expr {
+                if (expr.span.start() > 8) {
+                    expr.span = Span::from_start_end(expr.span.start() - 8, expr.span.end());
+                }
+                expr
+            }*/
+            
+            let post_correct_spans: Vec<(Expr, String)> = post
+                .into_iter()
+                .map(|(expr, msg)| (expr, msg))
+                .collect();
+
+            //println!("post_correct_spans {:#?} ", post_correct_spans);
+            
             // Calculate obligation and error message (if obligation is not
             // verified)
-            //println!("cmd {:#?}", &cmd);
-            //println!("ivl {:#?}", &ivl);
+            println!("cmd {:#?}", &cmd);
+            println!("ivl {:#?}", &ivl);
             
-            let oblig = swp(&ivl, post)?;
+            let oblig = swp(&ivl, post_correct_spans)?;
             //println!("Span {:#?}", Span::default());
             //println!("oblig {:#?}", &oblig);
             // Convert obligation to SMT expression
@@ -67,13 +79,15 @@ impl slang_ui::Hook for App {
             
             // Loop over expr in oblig 
             //Tror vi skal loopp her
-            for i in 0..oblig.len() {
+            let mut stop = false;
+            for mut i in 0..oblig.len() {
+                if (stop) break; 
                 solver.scope(|solver| {
                     let mut or_oblig = Expr::bool(false);
                     let mut last_obl = Expr::bool(false); let mut last_msg = String::new();
                     for (obl, msg) in oblig[0..i+1].iter() {
                         or_oblig = or_oblig.or(&obl.prefix(PrefixOp::Not));
-                        last_obl = obl.clone();
+                        last_obl.span = obl.span.clone();
                         last_msg = msg.clone()
                     }
                     if let Ok(soblig) = or_oblig.smt() { 
@@ -85,6 +99,7 @@ impl slang_ui::Hook for App {
                             // the span in which the error happens)
                             smtlib::SatResult::Sat => {
                                 cx.error(last_obl.span, format!("{last_msg}"));
+                                stop = true;
                             }
                             smtlib::SatResult::Unknown => {
                                 cx.warning(last_obl.span, "{msg}: unknown sat result");
@@ -129,8 +144,8 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                         cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd))?);
                                                                     }
                                                                     Ok(IVLCmd::nondets(&cases))
-                                                                    }   
-        CmdKind::Return         { expr }                        => Ok(IVLCmd::_return(expr)),
+                                                                    }
+        CmdKind::Return         { expr }                        => {let mut ivl_cmd = IVLCmd::_return(expr); ivl_cmd.span = cmd.span; Ok(ivl_cmd)},
         _ => todo!(" Not supported (yet)."),
     }
 }
@@ -141,10 +156,12 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
     match &ivl.kind {
         IVLCmdKind::Assert { condition, message }       => { post.push((condition.clone(), message.clone())); Ok(post) }
         IVLCmdKind::Assume { condition }                => { let mut new_post = Vec::new();
-                                                             for (expr, msg) in post.iter() {
-                                                                new_post.push((condition.imp(expr), msg.clone()))
+                                                             let mut new_condition = condition.clone();
+                                                             for (post_expr, msg) in post.iter() {
+                                                                new_condition = fix_span(new_condition, post_expr.span);
+                                                                new_post.push((condition.imp(post_expr), msg.clone()))
                                                              }
-                                                             Ok(new_post)
+                                                             Ok(post)
                                                             }
         IVLCmdKind::Seq(cmd1, cmd2)                     => { if !matches!(cmd1.kind, IVLCmdKind::Return{..}) {
                                                                 let post2 = swp(cmd2, post)?;   
@@ -152,24 +169,20 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                                 Ok(post1)
                                                             } else {
                                                                 let IVLCmdKind::Return{ ref expr } = cmd1.kind else { todo!("Won't ever happen") };
-                                                                if let Some(acc_expr) = expr {
-                                                                    let mut temp_expr = Expr::bool(false);
-                                                                    temp_expr.span = acc_expr.span;
-                                                                    temp_expr.span = Span::from_start_end(temp_expr.span.start() - 7, temp_expr.span.end());
-                                                                    Ok(vec![(temp_expr, "Jeg er dum og mit return er ikke til sidst".to_string())])
-                                                                } else {
-                                                                    Ok(vec![(Expr::bool(false), "Jeg er dum og mit return er ikke til sidst (no expr)".to_string())])
-                                                                }
+                                                                let mut temp_expr = Expr::bool(false);
+                                                                temp_expr.span = cmd1.span;
+                                                                Ok(vec![(temp_expr, "Return not at end of program".to_string())])
                                                             }
                                                             }
         IVLCmdKind::Assignment { name, expr }           => {let mut new_post = Vec::new();
                                                             for (post_expr, msg) in post.iter() { 
-                                                                new_post.push((post_expr.clone().subst(|x| x.is_ident(&name.ident), expr), ["Failed in assigning: ", &name.to_string(), " with expression ", &expr.to_string()].join("")));
+                                                                let mut new_expr = expr.clone();
+                                                                new_expr = fix_span(new_expr, post_expr.span.clone());
+                                                                new_post.push((post_expr.clone().subst(|x| x.is_ident(&name.ident), &new_expr), msg.to_string()));
                                                             }
                                                             Ok(new_post) //post[var -> expr]
                                                             }
         IVLCmdKind::Loop {invariants, variant, cases}   => {
-            
                                                             // https://pv24.cmath.eu/06-loops.html#weakest-preconditions
                                                              //let case = cases.cases[0];
                                                              //b -> wp[C](wp[while (b){C}](G)) /\ !b -> G
@@ -187,12 +200,25 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
         IVLCmdKind::Return { expr }                     => {if let Some(acc_expr) = expr {
                                                                 let mut new_post = Vec::new();
                                                                 for (post_expr, msg) in post.iter() { 
-                                                                    let _message = ["Failed in returning expression: ", (&acc_expr.to_string())].join("");
-                                                                    new_post.push((post_expr.clone().subst(|x| matches!(x.kind, ExprKind::Result{..}), acc_expr).clone(), _message.to_string()));
+                                                                    let _message = msg.to_string();//["Failed in returning expression: ", (&acc_expr.to_string())].join("");
+                                                                    let mut new_acc_expr = acc_expr.clone();
+                                                                    new_acc_expr = fix_span(new_acc_expr, post_expr.span.clone());
+                                                                    new_post.push((post_expr.clone().subst(|x| matches!(x.kind, ExprKind::Result{..}), &new_acc_expr).clone(), _message.to_string()));
                                                                 }
                                                                 Ok(new_post)
                                                             } else { Ok(post) }
                                                             },
         _ => todo!("Not supported (yet)."),
     }
+}
+
+
+//Expr_infex(Expr(A, span), Expr(0, span), span);
+
+fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
+    match &expr_in.kind {
+        ExprKind::Infix(e1, op, e2) => Expr::op(&fix_span(*e1.clone(), span), *op, &fix_span(*e2.clone(), span)),
+        _                           => { expr_in.span = span.clone(); expr_in}
+    }
+    
 }

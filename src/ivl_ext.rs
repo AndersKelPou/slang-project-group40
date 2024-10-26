@@ -39,19 +39,10 @@ impl IVLCmd {
             .unwrap_or(IVLCmd::nop())
     }
     pub fn _return(expr: &Option<Expr>) -> IVLCmd {
-        if let Some(acc_expr) = expr {
-            IVLCmd {
-                span: acc_expr.span,
-                kind: IVLCmdKind::Return {
-                    expr: expr.clone(),
-                }
-            }
-        } else {
-            IVLCmd {
-                span: Span::default(),
-                kind: IVLCmdKind::Return {
-                    expr: expr.clone(),
-                }
+        IVLCmd {
+            span: Span::default(),
+            kind: IVLCmdKind::Return {
+                expr: expr.clone(),
             }
         }
     }
