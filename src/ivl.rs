@@ -18,7 +18,7 @@ pub enum IVLCmdKind {
     Assume { condition: Expr },
     Assert { condition: Expr, message: String },
 
-    Loop { invariants: Vec<Expr>, variant: Option<Expr>, cases: Cases},
+    Loop { invariants: Vec<Expr>, variant: Option<Expr>, body: Cases},
 
     Return { expr: Option<Expr> },
 

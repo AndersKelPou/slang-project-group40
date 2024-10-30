@@ -5,6 +5,7 @@ method sumn(n: Int): Int
     var i: Int := 0;
     loop 
         // Error: Invariant may not be preserved
+        // @CheckError
         invariant i <= n 
     {
         i <= n =>

@@ -65,7 +65,7 @@ impl slang_ui::Hook for App {
             // Calculate obligation and error message (if obligation is not
             // verified)
             println!("cmd {:#?}", &cmd);
-            println!("ivl {:#?}", &ivl);
+            //println!("ivl {:#?}", &ivl);
             
             let oblig = swp(&ivl, post_correct_spans)?;
             //println!("Span {:#?}", Span::default());
@@ -81,7 +81,9 @@ impl slang_ui::Hook for App {
             //Tror vi skal loopp her
             let mut stop = false;
             for mut i in 0..oblig.len() {
-                if (stop) break; 
+                if (stop) {
+                    break;
+                } 
                 solver.scope(|solver| {
                     let mut or_oblig = Expr::bool(false);
                     let mut last_obl = Expr::bool(false); let mut last_msg = String::new();
@@ -138,7 +140,29 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     },
         CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
         CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
-        CmdKind::Loop           { invariants, variant, body}    => {Ok(IVLCmd::_loop(invariants, variant, body))},
+        CmdKind::Loop           { invariants, variant, body}    => {let mut case_bodies = Vec::new();
+                                                                    let mut all_invariants = Expr::bool(true);
+                                                                    for i in 0..invariants.len() {
+                                                                        all_invariants = all_invariants.and(&invariants[i]);
+                                                                        //cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd))?);
+                                                                    }
+                                                                    let mut all_condtions = Expr::bool(true);
+                                                                    for i in 0..body.cases.len() {
+                                                                        all_condtions = all_condtions.and(&body.cases[i].condition);
+                                                                        case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd)?);
+                                                                    }
+                                                                    all_condtions = fix_span(all_condtions, all_invariants.span);
+                                                                    //case_bodies = fix_span(case_bodies, all_invariants.span);
+                                                                    let assert_statement = IVLCmd::assert(&all_invariants, "Invariant might not hold");
+                                                                    //TODO add havoc of all vars changed between assert and assume:
+                                                                    let pre_loop = IVLCmd::seq(&assert_statement, &IVLCmd::assume(&all_invariants));
+                                                                    let loop_body1 = IVLCmd::seq(&IVLCmd::assume(&all_condtions),
+                                                                                                 &IVLCmd::seqs(&case_bodies));
+                                                                    let loop_body2 = IVLCmd::seq(&assert_statement,
+                                                                                                 &IVLCmd::assume(&Expr::bool(false)));
+                                                                    let loop_body = IVLCmd::seq(&loop_body1, &loop_body2);
+                                                                    let encoded_loop = IVLCmd::nondet(&loop_body, &IVLCmd::assume(&all_condtions.prefix(PrefixOp::Not)));
+                                                                    Ok(IVLCmd::seq(&pre_loop, &encoded_loop))},
         CmdKind::Match          { body }                        => {let mut cases = Vec::new();
                                                                     for i in 0..body.cases.len() {
                                                                         cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd))?);
@@ -152,6 +176,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
 
 // Set *based* weakest precondition
 fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, String)>)> {
+    println!("Finding wp..");
     //println!("Finding WP of {:#?} with expr: {:#?}", &ivl.kind, &expr_in.kind);
     match &ivl.kind {
         IVLCmdKind::Assert { condition, message }       => { post.push((condition.clone(), message.clone())); Ok(post) }
@@ -159,9 +184,9 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                              let mut new_condition = condition.clone();
                                                              for (post_expr, msg) in post.iter() {
                                                                 new_condition = fix_span(new_condition, post_expr.span);
-                                                                new_post.push((condition.imp(post_expr), msg.clone()))
+                                                                new_post.push((new_condition.imp(post_expr), msg.clone()))
                                                              }
-                                                             Ok(post)
+                                                             Ok(new_post)
                                                             }
         IVLCmdKind::Seq(cmd1, cmd2)                     => { if !matches!(cmd1.kind, IVLCmdKind::Return{..}) {
                                                                 let post2 = swp(cmd2, post)?;   
@@ -182,16 +207,6 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                             }
                                                             Ok(new_post) //post[var -> expr]
                                                             }
-        IVLCmdKind::Loop {invariants, variant, cases}   => {
-                                                            // https://pv24.cmath.eu/06-loops.html#weakest-preconditions
-                                                             //let case = cases.cases[0];
-                                                             //b -> wp[C](wp[while (b){C}](G)) /\ !b -> G
-                                                             //let res = case.condition.imp(swp(case.cmd, swp(&ivl,post))).and(!case.condition.and(post))
-                                                             //Ok(vec![(res.clone(), "Something wrong with the Loop yo".to_string())])
-
-                                                             let precondition = Expr::bool(true);
-                                                             Ok(vec![(precondition.clone(), "Something wrong with the Loop yo".to_string())])// i && post
-                                                            },
         IVLCmdKind::NonDet( cmd1, cmd2 )                => {let mut post1 = swp(cmd1, post.clone())?;
                                                             let post2 = swp(cmd2, post.clone())?;
                                                             post1.extend(post2);
@@ -218,6 +233,7 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
 fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
     match &expr_in.kind {
         ExprKind::Infix(e1, op, e2) => Expr::op(&fix_span(*e1.clone(), span), *op, &fix_span(*e2.clone(), span)),
+        ExprKind::Prefix(op, e)     => fix_span(*e.clone(), span).prefix(*op),
         _                           => { expr_in.span = span.clone(); expr_in}
     }
     

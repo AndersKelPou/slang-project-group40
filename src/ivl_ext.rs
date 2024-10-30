@@ -22,13 +22,13 @@ impl IVLCmd {
             kind: IVLCmdKind::Seq(Box::new(self.clone()), Box::new(other.clone())),
         }
     }
-    pub fn _loop(invariants: &Vec<Expr>, variant: &Option<Expr>, cases: &Cases) -> IVLCmd {
+    pub fn _loop(invariants: &Vec<Expr>, variant: &Option<Expr>, body: &Cases) -> IVLCmd {
         IVLCmd {
             span: Span::default(),
             kind: IVLCmdKind::Loop {
                 invariants: invariants.to_vec(),
                 variant: variant.clone(), 
-                cases: cases.clone(),
+                body: body.clone(),
             }
         }
     }
@@ -101,7 +101,7 @@ impl std::fmt::Display for IVLCmd {
             IVLCmdKind::Assert { condition, .. } => write!(f, "assert {condition}"),
             IVLCmdKind::Seq(c1, c2) => write!(f, "{c1} ; {c2}"),
             IVLCmdKind::NonDet(c1, c2) => write!(f, "{{ {c1} }} [] {{ {c2} }}"),
-            IVLCmdKind::Loop {invariants, variant, cases} => write!(f, "loop {{ }}"),
+            IVLCmdKind::Loop {invariants, variant, body} => write!(f, "loop {{ }}"),
             IVLCmdKind::Return {expr} => {if let Some(expr) = expr {write!(f, "return {expr}")} else {write!(f, "returned nothing")}}
         }
     }
