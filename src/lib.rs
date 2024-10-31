@@ -4,7 +4,7 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind};
+use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name};
 use slang::Span;
 use slang_ui::prelude::*;
 use std::collections::HashSet;
@@ -64,14 +64,14 @@ impl slang_ui::Hook for App {
             
             // Calculate obligation and error message (if obligation is not
             // verified)
-            println!("cmd {:#?}", &cmd);
+            //println!("cmd {:#?}", &cmd);
             //println!("ivl {:#?}", &ivl);
             
             let oblig = swp(&ivl, post_correct_spans)?;
             //println!("Span {:#?}", Span::default());
             //println!("oblig {:#?}", &oblig);
             // Convert obligation to SMT expression
-            println!("Out vec {:#?}", oblig);
+            //println!("Out vec {:#?}", oblig);
 
             // Run the following solver-related statements in a closed scope.
             // That is, after exiting the scope, all assertions are forgotten
@@ -136,7 +136,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
         CmdKind::Assert         { condition, .. }               => Ok(IVLCmd::assert(condition, "Assert might fail!")),
         CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
         CmdKind::VarDefinition  { name, ty, expr }              => { if let Some(expr) = expr {Ok(IVLCmd::assign(name, expr))} // has expr 
-                                                                     else {println!("Laver nop");Ok(IVLCmd::nop())} // doesn't have expr
+                                                                     else {Ok(IVLCmd::nop())} // doesn't have expr
                                                                     },
         CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
         CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
@@ -155,7 +155,11 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     //case_bodies = fix_span(case_bodies, all_invariants.span);
                                                                     let assert_statement = IVLCmd::assert(&all_invariants, "Invariant might not hold");
                                                                     //TODO add havoc of all vars changed between assert and assume:
-                                                                    let pre_loop = IVLCmd::seq(&assert_statement, &IVLCmd::assume(&all_invariants));
+                                                                    
+                                                                    let havoc_statement = find_assignments(cmd);
+
+                                                                    let pre_loop = IVLCmd::seq(&assert_statement, 
+                                                                                                &IVLCmd::seq(&havoc_statement, &IVLCmd::assume(&all_invariants)));
                                                                     let loop_body1 = IVLCmd::seq(&IVLCmd::assume(&all_condtions),
                                                                                                  &IVLCmd::seqs(&case_bodies));
                                                                     let loop_body2 = IVLCmd::seq(&assert_statement,
@@ -176,9 +180,10 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
 
 // Set *based* weakest precondition
 fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, String)>)> {
-    println!("Finding wp..");
+    //println!("Finding wp..");
     //println!("Finding WP of {:#?} with expr: {:#?}", &ivl.kind, &expr_in.kind);
     match &ivl.kind {
+        IVLCmdKind::Havoc { name, ty }                  => { Ok(post) }
         IVLCmdKind::Assert { condition, message }       => { post.push((condition.clone(), message.clone())); Ok(post) }
         IVLCmdKind::Assume { condition }                => { let mut new_post = Vec::new();
                                                              let mut new_condition = condition.clone();
@@ -236,5 +241,37 @@ fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
         ExprKind::Prefix(op, e)     => fix_span(*e.clone(), span).prefix(*op),
         _                           => { expr_in.span = span.clone(); expr_in}
     }
-    
 }
+
+use rand::distributions::{Alphanumeric, DistString};
+fn find_assignments(cmd: &Cmd) -> IVLCmd {
+    match &cmd.kind {                              // Same as havoc
+        CmdKind::Assignment     {name, expr}    => IVLCmd::seq(&IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
+                                                                &find_readings(expr)),
+        CmdKind::Seq            (cmd1, cmd2)    => IVLCmd::seq(&find_assignments(cmd1), &find_assignments(cmd2)),
+        CmdKind::Match          { body }        => {let mut out = IVLCmd::nop();
+                                                    for case in body.cases.iter() {
+                                                        out = IVLCmd::seq(&out, &find_assignments(&case.cmd))
+                                                    };
+                                                    out
+                                                    }
+        CmdKind::Loop           { body, .. }    => { let mut out = IVLCmd::nop();
+                                                    for case in body.cases.iter() {
+                                                        out = IVLCmd::seq(&out, &find_assignments(&case.cmd));
+                                                    };
+                                                    out
+                                                    },
+        CmdKind::Assert { condition, .. }       => {find_readings(condition)},
+        CmdKind::Assume { condition }           => {find_readings(condition)},
+        _                                       => IVLCmd::nop()
+    }
+} 
+
+fn find_readings(expr: &Expr) -> IVLCmd {
+    match &expr.kind {                              // Same as havoc
+        ExprKind::Ident(ident)      => IVLCmd::assign(&Name {span: expr.span, ident: ident.clone()}, &Expr::ident(&ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
+        ExprKind::Infix(e1, op, e2) => IVLCmd::seq(&find_readings(e1), &find_readings(e2)),
+        ExprKind::Prefix(op, e)     => find_readings(e),
+        _                           => IVLCmd::nop()
+    }
+} 
