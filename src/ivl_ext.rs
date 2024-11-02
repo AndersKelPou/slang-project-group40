@@ -99,7 +99,7 @@ impl std::fmt::Display for IVLCmd {
             IVLCmdKind::Havoc { name, .. } => write!(f, "havoc {name}"),
             IVLCmdKind::Assume { condition } => write!(f, "assume {condition}"),
             IVLCmdKind::Assert { condition, .. } => write!(f, "assert {condition}"),
-            IVLCmdKind::Seq(c1, c2) => write!(f, "{c1} ; {c2}"),
+            IVLCmdKind::Seq(c1, c2) => write!(f, "{c1} ;\n{c2}"),
             IVLCmdKind::NonDet(c1, c2) => write!(f, "{{ {c1} }} [] {{ {c2} }}"),
             IVLCmdKind::Loop {invariants, variant, body} => write!(f, "loop {{ }}"),
             IVLCmdKind::Return {expr} => {if let Some(expr) = expr {write!(f, "return {expr}")} else {write!(f, "returned nothing")}}

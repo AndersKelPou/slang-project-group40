@@ -4,7 +4,7 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name};
+use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op};
 use slang::Span;
 use slang_ui::prelude::*;
 use std::collections::HashSet;
@@ -33,6 +33,7 @@ impl slang_ui::Hook for App {
             let cmd = &m.body.clone().unwrap().cmd;
             // Encode it in IVL
             let ivl = cmd_to_ivlcmd(cmd)?;
+            //println!("Ivl: {}", ivl);
             // Get method's postconditions;
             let posts = m.ensures();
             // Merge them into a single condition
@@ -152,16 +153,14 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     }
                                                                     all_condtions = fix_span(all_condtions, all_invariants.span);
                                                                     //case_bodies = fix_span(case_bodies, all_invariants.span);
-                                                                    let assert_statement = IVLCmd::assert(&all_invariants, "Invariant might not hold");
-                                                                    //TODO add havoc of all vars changed between assert and assume:
                                                                     
                                                                     let havoc_statement = find_assignments(cmd);
 
-                                                                    let pre_loop = IVLCmd::seq(&assert_statement, 
+                                                                    let pre_loop = IVLCmd::seq(&IVLCmd::assert(&all_invariants, "Invariant might not hold on entry"), 
                                                                                                 &IVLCmd::seq(&havoc_statement, &IVLCmd::assume(&all_invariants)));
                                                                     let loop_body1 = IVLCmd::seq(&IVLCmd::assume(&all_condtions),
                                                                                                  &IVLCmd::seqs(&case_bodies));
-                                                                    let loop_body2 = IVLCmd::seq(&assert_statement,
+                                                                    let loop_body2 = IVLCmd::seq(&IVLCmd::assert(&all_invariants, "Invariant might not be preserved"),
                                                                                                  &IVLCmd::assume(&Expr::bool(false)));
                                                                     let loop_body = IVLCmd::seq(&loop_body1, &loop_body2);
                                                                     let encoded_loop = IVLCmd::nondet(&loop_body, &IVLCmd::assume(&all_condtions.prefix(PrefixOp::Not)));
@@ -172,8 +171,26 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     }
                                                                     Ok(IVLCmd::nondets(&cases))
                                                                     }
+        CmdKind::For            { name, range, body, .. }       => {let Range::FromTo(from, to) = range.clone();
+                                                                    let assign = IVLCmd::assign(name, &from);
+                                                                    let range_check = IVLCmd::assert(&Expr::op(&from, Op::Lt, &to), "Range start has to be less than range end");
+                                                                    let ExprKind::Num(from_int) = from.kind else { todo!("Feature 4") };
+                                                                    let ExprKind::Num(to_int) = to.kind else { todo!("Feature 4") };
+                                                                    
+                                                                    let body = cmd_to_ivlcmd(&body.cmd)?;
+                                                                    let inc = IVLCmd::assign(name, &Expr::op(&Expr::ident(&name.ident, &from.ty), Op::Add, &Expr::num(1)));
+                                                                    let mut unrolled = Vec::new();
+                                                                    unrolled.push(assign.clone());
+                                                                    unrolled.push(range_check.clone());
+                                                                    for i in from_int..to_int {
+                                                                        unrolled.push(body.clone());
+                                                                        unrolled.push(inc.clone());
+                                                                    }
+                                                                    //ast::Op::Gt => l.as_int()?.gt(r.as_int()?).into_dynamic(),
+                                                                    Ok(IVLCmd::seqs(&unrolled))
+                                                                    }
         CmdKind::Return         { expr }                        => {let mut ivl_cmd = IVLCmd::_return(expr); ivl_cmd.span = cmd.span; Ok(ivl_cmd)},
-        _ => todo!(" Not supported (yet)."),
+        any => todo!(" Not supported (yet). {:#?}", any),
     }
 }
 
