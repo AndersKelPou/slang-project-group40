@@ -1608,6 +1608,7 @@ version = "0.1.0"
 dependencies = [
  "datatest-stable",
  "itertools 0.13.0",
+ "rand",
  "regex",
  "slang-ui",
  "tokio",

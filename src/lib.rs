@@ -33,7 +33,6 @@ impl slang_ui::Hook for App {
             let cmd = &m.body.clone().unwrap().cmd;
             // Encode it in IVL
             let ivl = cmd_to_ivlcmd(cmd)?;
-
             // Get method's postconditions;
             let posts = m.ensures();
             // Merge them into a single condition
@@ -246,8 +245,9 @@ fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
 use rand::distributions::{Alphanumeric, DistString};
 fn find_assignments(cmd: &Cmd) -> IVLCmd {
     match &cmd.kind {                              // Same as havoc
-        CmdKind::Assignment     {name, expr}    => IVLCmd::seq(&IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
-                                                                &find_readings(expr)),
+        //CmdKind::Assignment     {name, expr}    => IVLCmd::seq(&IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
+        //                                                        &find_readings(expr)),
+        CmdKind::Assignment     {name, expr}    => IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
         CmdKind::Seq            (cmd1, cmd2)    => IVLCmd::seq(&find_assignments(cmd1), &find_assignments(cmd2)),
         CmdKind::Match          { body }        => {let mut out = IVLCmd::nop();
                                                     for case in body.cases.iter() {
@@ -261,8 +261,8 @@ fn find_assignments(cmd: &Cmd) -> IVLCmd {
                                                     };
                                                     out
                                                     },
-        CmdKind::Assert { condition, .. }       => {find_readings(condition)},
-        CmdKind::Assume { condition }           => {find_readings(condition)},
+        //CmdKind::Assert { condition, .. }       => {find_readings(condition)},
+        //CmdKind::Assume { condition }           => {find_readings(condition)},
         _                                       => IVLCmd::nop()
     }
 } 
