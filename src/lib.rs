@@ -4,17 +4,17 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op};
+use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op, MethodRef, Ref};
 use slang::Span;
 use slang_ui::prelude::*;
 use std::collections::HashSet;
 pub struct App; 
 
+
 impl slang_ui::Hook for App {
     fn analyze(&self, cx: &mut slang_ui::Context, file: &slang::SourceFile) -> Result<()> {
         // Get reference to Z3 solver
         let mut solver = cx.solver()?;
-
         // Iterate methods
         for m in file.methods() {
             // Get method's preconditions;
@@ -190,7 +190,26 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     Ok(IVLCmd::seqs(&unrolled))
                                                                     }
         CmdKind::Return         { expr }                        => {let mut ivl_cmd = IVLCmd::_return(expr); ivl_cmd.span = cmd.span; Ok(ivl_cmd)},
-        any => todo!(" Not supported (yet). {:#?}", any),
+        CmdKind::MethodCall     { name, fun_name, args, method} => {//name = fun_name(args)
+                                                                    // =>
+                                                                    //a' = args
+                                                                    //assert method.requires[x => a']
+                                                                    //havoc name
+                                                                    //assume method.ensures[x, Result => a', name]
+                                                                    //let (first, second) : MethodRef = method.clone();
+                                                                    //println!("first {:#?}", first);
+                                                                    //println!("second {:#?}", second);
+                                                                    //MethodRef->Ref->Resolved(.., Weak<Items>)->Items->methods har muligvis alle metoder i programmet i runtime
+                                                                    println!("method {:#?}", method);le
+                                                                    if matches!(method.0, Ref::Resolved{ident, items}) {
+                                                                        
+                                                                        println!("items.methods {:#?}", items.methods);
+                                                                    } else {
+                                                                        //Den er ikke resolved seriøst
+                                                                    }
+                                                                    Ok(IVLCmd::nop())
+                                                                    },
+        any => todo!(" Not supported (yet) in IVLCmd. {:#?}", any),
     }
 }
 
@@ -244,12 +263,9 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                                 Ok(new_post)
                                                             } else { Ok(post) }
                                                             },
-        _ => todo!("Not supported (yet)."),
+        any => todo!(" Not supported (yet) in swp. {:#?}", any),
     }
 }
-
-
-//Expr_infex(Expr(A, span), Expr(0, span), span);
 
 fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
     match &expr_in.kind {
@@ -262,8 +278,6 @@ fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
 use rand::distributions::{Alphanumeric, DistString};
 fn find_assignments(cmd: &Cmd) -> IVLCmd {
     match &cmd.kind {                              // Same as havoc
-        //CmdKind::Assignment     {name, expr}    => IVLCmd::seq(&IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
-        //                                                        &find_readings(expr)),
         CmdKind::Assignment     {name, expr}    => IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
         CmdKind::Seq            (cmd1, cmd2)    => IVLCmd::seq(&find_assignments(cmd1), &find_assignments(cmd2)),
         CmdKind::Match          { body }        => {let mut out = IVLCmd::nop();
@@ -278,12 +292,10 @@ fn find_assignments(cmd: &Cmd) -> IVLCmd {
                                                     };
                                                     out
                                                     },
-        //CmdKind::Assert { condition, .. }       => {find_readings(condition)},
-        //CmdKind::Assume { condition }           => {find_readings(condition)},
-        _                                       => IVLCmd::nop()
+        _                                         => IVLCmd::nop()
     }
 } 
-
+//Is not used
 fn find_readings(expr: &Expr) -> IVLCmd {
     match &expr.kind {                              // Same as havoc
         ExprKind::Ident(ident)      => IVLCmd::assign(&Name {span: expr.span, ident: ident.clone()}, &Expr::ident(&ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
