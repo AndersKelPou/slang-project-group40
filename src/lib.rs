@@ -4,7 +4,7 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op, MethodRef, Ref};
+use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op, MethodRef};
 use slang::Span;
 use slang_ui::prelude::*;
 use std::collections::HashSet;
@@ -29,11 +29,6 @@ impl slang_ui::Hook for App {
             // Assert precondition
             solver.assert(spre.as_bool()?)?;
 
-            // Get method's body
-            let cmd = &m.body.clone().unwrap().cmd;
-            // Encode it in IVL
-            let ivl = cmd_to_ivlcmd(cmd)?;
-            //println!("Ivl: {}", ivl);
             // Get method's postconditions;
             let posts = m.ensures();
             // Merge them into a single condition
@@ -48,17 +43,22 @@ impl slang_ui::Hook for App {
             if post.is_empty() {
                 post.push((Expr::bool(true), "Default post condition".to_string()));
             }
+            let post_correct_spans: Vec<(Expr, String)> = post
+                .into_iter()
+                .map(|(expr, msg)| (expr, msg))
+                .collect();
+
+            // Get method's body
+            let cmd = &m.body.clone().unwrap().cmd;
+            // Encode it in IVL
+            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone())?;
+            //println!("Ivl: {}", ivl);
             /*fn adjust_span(mut expr: Expr) -> Expr {
                 if (expr.span.start() > 8) {
                     expr.span = Span::from_start_end(expr.span.start() - 8, expr.span.end());
                 }
                 expr
             }*/
-            
-            let post_correct_spans: Vec<(Expr, String)> = post
-                .into_iter()
-                .map(|(expr, msg)| (expr, msg))
-                .collect();
 
             //println!("post_correct_spans {:#?} ", post_correct_spans);
             
@@ -130,11 +130,11 @@ impl slang_ui::Hook for App {
 
 // Encoding of (assert-only) statements into IVL (for programs comprised of only
 // a single assertion)
-fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
+fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>) -> Result<IVLCmd> {
     //println!("cmd to ivlcmd {:#?}", &cmd.kind);
     match &cmd.kind {
         CmdKind::Assert         { condition, .. }               => Ok(IVLCmd::assert(condition, "Assert might fail!")),
-        CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1)?, &cmd_to_ivlcmd(cmd2)?)),
+        CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1, post.clone())?, &cmd_to_ivlcmd(cmd2, post.clone())?)),
         CmdKind::VarDefinition  { name, ty, expr }              => { if let Some(expr) = expr {Ok(IVLCmd::assign(name, expr))} // has expr 
                                                                      else {Ok(IVLCmd::nop())} // doesn't have expr
                                                                     },
@@ -149,7 +149,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     let mut all_condtions = Expr::bool(true);
                                                                     for i in 0..body.cases.len() {
                                                                         all_condtions = all_condtions.and(&body.cases[i].condition);
-                                                                        case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd)?);
+                                                                        case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd, post.clone())?);
                                                                     }
                                                                     all_condtions = fix_span(all_condtions, all_invariants.span);
                                                                     //case_bodies = fix_span(case_bodies, all_invariants.span);
@@ -167,7 +167,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     Ok(IVLCmd::seq(&pre_loop, &encoded_loop))},
         CmdKind::Match          { body }                        => {let mut cases = Vec::new();
                                                                     for i in 0..body.cases.len() {
-                                                                        cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd))?);
+                                                                        cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd), post.clone())?);
                                                                     }
                                                                     Ok(IVLCmd::nondets(&cases))
                                                                     }
@@ -177,7 +177,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     let ExprKind::Num(from_int) = from.kind else { todo!("Feature 4") };
                                                                     let ExprKind::Num(to_int) = to.kind else { todo!("Feature 4") };
                                                                     
-                                                                    let body = cmd_to_ivlcmd(&body.cmd)?;
+                                                                    let body = cmd_to_ivlcmd(&body.cmd, post)?;
                                                                     let inc = IVLCmd::assign(name, &Expr::op(&Expr::ident(&name.ident, &from.ty), Op::Add, &Expr::num(1)));
                                                                     let mut unrolled = Vec::new();
                                                                     unrolled.push(assign.clone());
@@ -189,7 +189,15 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     //ast::Op::Gt => l.as_int()?.gt(r.as_int()?).into_dynamic(),
                                                                     Ok(IVLCmd::seqs(&unrolled))
                                                                     }
-        CmdKind::Return         { expr }                        => {let mut ivl_cmd = IVLCmd::_return(expr); ivl_cmd.span = cmd.span; Ok(ivl_cmd)},
+        CmdKind::Return         { expr }                        => {let mut ivl_cmd = IVLCmd::_return(expr);
+                                                                    ivl_cmd.span = cmd.span;
+                                                                    let mut seq = IVLCmd::seq(&ivl_cmd, &IVLCmd::assert(&post[0].0, &post[0].1));
+                                                                    for i in 1..post.len() {
+                                                                        seq = IVLCmd::seq(&seq, &IVLCmd::assert(&post[i].0, &post[i].1));
+                                                                    }
+
+                                                                    Ok(IVLCmd::seq(&seq, &IVLCmd::assume(&Expr::bool(false))))},
+        /*
         CmdKind::MethodCall     { name, fun_name, args, method} => {//name = fun_name(args)
                                                                     // =>
                                                                     //a' = args
@@ -200,7 +208,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     //println!("first {:#?}", first);
                                                                     //println!("second {:#?}", second);
                                                                     //MethodRef->Ref->Resolved(.., Weak<Items>)->Items->methods har muligvis alle metoder i programmet i runtime
-                                                                    println!("method {:#?}", method);le
+                                                                    println!("method {:#?}", method);
                                                                     if matches!(method.0, Ref::Resolved{ident, items}) {
                                                                         
                                                                         println!("items.methods {:#?}", items.methods);
@@ -209,6 +217,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd) -> Result<IVLCmd> {
                                                                     }
                                                                     Ok(IVLCmd::nop())
                                                                     },
+                                                                    */
         any => todo!(" Not supported (yet) in IVLCmd. {:#?}", any),
     }
 }
@@ -228,16 +237,9 @@ fn swp<'a>(ivl: &IVLCmd, mut post: Vec<(Expr, String)>) -> Result<(Vec<(Expr, St
                                                              }
                                                              Ok(new_post)
                                                             }
-        IVLCmdKind::Seq(cmd1, cmd2)                     => { if !matches!(cmd1.kind, IVLCmdKind::Return{..}) {
-                                                                let post2 = swp(cmd2, post)?;   
-                                                                let post1 = swp(cmd1, post2)?;
-                                                                Ok(post1)
-                                                            } else {
-                                                                let IVLCmdKind::Return{ ref expr } = cmd1.kind else { todo!("Won't ever happen") };
-                                                                let mut temp_expr = Expr::bool(false);
-                                                                temp_expr.span = cmd1.span;
-                                                                Ok(vec![(temp_expr, "Return not at end of program".to_string())])
-                                                            }
+        IVLCmdKind::Seq(cmd1, cmd2)                     => {let post2 = swp(cmd2, post)?;   
+                                                            let post1 = swp(cmd1, post2)?;
+                                                            Ok(post1)
                                                             }
         IVLCmdKind::Assignment { name, expr }           => {let mut new_post = Vec::new();
                                                             for (post_expr, msg) in post.iter() { 

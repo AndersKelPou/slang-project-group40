@@ -1,12 +1,12 @@
 method return_too_fast(x: Int): Int 
-    requires x >= 4
-    ensures result >= x
-{
-
-    var acc: Int;
-    acc := x / 2;
+    requires x == 0
     // @CheckError
-    return acc;
-    acc := acc * 6;
-    return acc
+    ensures result < x - 5
+{
+    var y: Int := 4;
+    y := y + 9;
+    // CheckError here no longer is true, since early return is imlpemented
+    return y;
+    x := 2;
+    return y
 }
