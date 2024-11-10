@@ -5,10 +5,10 @@ method sumn(n: Int): Int
     match {
         n == 0 => 
             return 0,
-        n > 0 => 
+        true => 
             var res: Int;
+            // @CheckError
             res := sumn(n - 1);
             return res + n
-    };
-    assert false
+    }
 }

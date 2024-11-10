@@ -4,9 +4,11 @@ pub mod ivl;
 mod ivl_ext;
 
 use ivl::{IVLCmd, IVLCmdKind};
-use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op, MethodRef, Ref};
+use slang::ast::{Cmd, CmdKind, Expr, PrefixOp, ExprKind, Type, Ident, Name, Range, Op, MethodRef, Var};
 use slang::Span;
 use slang_ui::prelude::*;
+use std::env::var;
+use std::sync::Arc;
 use std::collections::HashSet;
 pub struct App; 
 
@@ -17,21 +19,39 @@ impl slang_ui::Hook for App {
         let mut solver = cx.solver()?;
         // Iterate methods
         for m in file.methods() {
+            
             // Get method's preconditions;
             let pres = m.requires();
             // Merge them into a single condition
-            let pre = pres
+            let mut pre = pres
                 .cloned()
                 .reduce(|a, b| a & b)
                 .unwrap_or(Expr::bool(true));
+
+            let mut variant_var = 0;
+
+            if let Some(e) = m.variant.clone() {
+                let mut gte_zero = e.ge(&Expr::num(0));
+                gte_zero = fix_span(gte_zero, e.span);
+                pre = pre.and(&gte_zero);
+
+                //Figure out which input variable is being used in decrease
+                for mut i in 0..m.args.len() {
+                    let x = m.args[i].clone();
+                    if let Some(iden) = e.as_ident() {
+                        if x.name.ident.eq(iden) {
+                            variant_var = i;
+                        }
+                    }
+                }
+            }
+            
             // Convert the expression into an SMT expression
             let spre = pre.smt()?;
             // Assert precondition
             solver.assert(spre.as_bool()?)?;
 
-            let decrease = m.modifies();
-            decrease.map(|x| (print!(" AAAAAAAAAAA: {:#?}",x.0)));
-
+            
             // Get method's postconditions;
             let posts = m.ensures();
             // Merge them into a single condition
@@ -54,7 +74,7 @@ impl slang_ui::Hook for App {
             // Get method's body
             let cmd = &m.body.clone().unwrap().cmd;
             // Encode it in IVL
-            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file.clone())?;
+            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file.clone(), (&m.variant.clone(),&variant_var))?;
             //println!("Ivl: {}", ivl);
             /*fn adjust_span(mut expr: Expr) -> Expr {
                 if (expr.span.start() > 8) {
@@ -133,14 +153,17 @@ impl slang_ui::Hook for App {
 
 // Encoding of (assert-only) statements into IVL (for programs comprised of only
 // a single assertion)
-fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile) -> Result<IVLCmd> {
+fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile, vari: (&Option<Expr>,&usize)) -> Result<IVLCmd> {
     //println!("cmd to ivlcmd {:#?}", &cmd.kind);
     match &cmd.kind {
         CmdKind::Assert         { condition, .. }               => Ok(IVLCmd::assert(condition, "Assert might fail!")),
-        CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1, post.clone(), file)?, 
-                                                                                  &cmd_to_ivlcmd(cmd2, post.clone(), file)?)),
-        CmdKind::VarDefinition  { name, ty, expr }              => { if let Some(expr) = expr {Ok(IVLCmd::assign(name, expr))} // has expr 
-                                                                     else {Ok(IVLCmd::nop())} // doesn't have expr
+        CmdKind::Seq            ( cmd1, cmd2)                   => Ok(IVLCmd::seq(&cmd_to_ivlcmd(cmd1, post.clone(), file, vari)?, 
+                                                                                  &cmd_to_ivlcmd(cmd2, post.clone(), file, vari)?)),
+        CmdKind::VarDefinition  { name, ty, expr }              => { if let Some(expr) = expr { // has expr 
+                                                                        cmd_to_ivlcmd(&Cmd::assign(name, expr), post.clone(), file, vari)
+                                                                     } else { // doesn't have expr
+                                                                        Ok(IVLCmd::nop())
+                                                                     }
                                                                     },
         CmdKind::Assignment     { name, expr }                  => Ok(IVLCmd::assign(name, expr)),
         CmdKind::Assume         { condition }                   => Ok(IVLCmd::assume(condition)),
@@ -153,7 +176,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile)
                                                                     let mut all_condtions = Expr::bool(true);
                                                                     for i in 0..body.cases.len() {
                                                                         all_condtions = all_condtions.and(&body.cases[i].condition);
-                                                                        case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd, post.clone(), file)?);
+                                                                        case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd, post.clone(), file, vari)?);
                                                                     }
                                                                     all_condtions = fix_span(all_condtions, all_invariants.span);
                                                                     //case_bodies = fix_span(case_bodies, all_invariants.span);
@@ -172,7 +195,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile)
         CmdKind::Match          { body }                        => {let mut cases = Vec::new();
                                                                     for i in 0..body.cases.len() {
                                                                         cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)),
-                                                                                                             &body.cases[i].cmd), post.clone(), file)?);
+                                                                                                             &body.cases[i].cmd), post.clone(), file , vari)?);
                                                                     }
                                                                     Ok(IVLCmd::nondets(&cases))
                                                                     }
@@ -182,7 +205,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile)
                                                                     let ExprKind::Num(from_int) = from.kind else { todo!("Feature 4") };
                                                                     let ExprKind::Num(to_int) = to.kind else { todo!("Feature 4") };
                                                                     
-                                                                    let body = cmd_to_ivlcmd(&body.cmd, post.clone(), file)?;
+                                                                    let body = cmd_to_ivlcmd(&body.cmd, post.clone(), file, vari)?;
                                                                     let inc = IVLCmd::assign(name, &Expr::op(&Expr::ident(&name.ident, &from.ty), Op::Add, &Expr::num(1)));
                                                                     let mut unrolled = Vec::new();
                                                                     unrolled.push(assign.clone());
@@ -202,56 +225,94 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile)
                                                                     }
 
                                                                     Ok(IVLCmd::seq(&seq, &IVLCmd::assume(&Expr::bool(false))))},
-        CmdKind::MethodCall     { name, fun_name, args, method} => {//name = fun_name(args)
+        CmdKind::MethodCall     { name, fun_name, args, method} => {//method fun_name(inp1, mul): Int
+                                                                    //name = fun_name(args)
                                                                     // =>
                                                                     //a' = args
                                                                     //assert method.requires[x => a']
                                                                     //havoc name
                                                                     //assume method.ensures[x, Result => a', name]
-
-                                                                    let Ref::Resolved(ident, input_arg_names) = method.clone();
-                                                                    let meth = file.methods().get(ident);
-                                                                    let requires = meth.requires();
-                                                                    let mut pre = requires
-                                                                        .cloned()
-                                                                        .reduce(|a, b| a & b)
-                                                                        .unwrap_or(Expr::bool(true));
+                                                                    
+                                                                    let mut input_arg_names = method.clone().get().unwrap().args.clone();
                                                                         
-                                                                    //assert method.requires[x => a']
-                                                                    
-                                                                    // meth(b, x+2)
-                                                                    // def meth(a, b)
-                                                                        //ensures a + b = 0
-                                                                    //=>
-                                                                        //ensures a + b = 0 [a->b]
-                                                                        //ensures b + b = 0 [b->x+2]
-                                                                        //ensures x+2 + x+2 = 0
+                                                                    if let Some(method_arc) = method.clone().get() {
+                                                                        let identforreal = &method_arc.name.ident;
+                                                                        
+                                                                        let requires = method_arc.requires();
+                                                                        let mut pre = requires
+                                                                            .cloned()
+                                                                            .reduce(|a, b| a & b)
+                                                                            .unwrap_or(Expr::bool(true));
+                                                                        
+                                                                        
+                                                                        //Little bit of a hack solution. only works for methods with one argument.
+                                                                        if let Some(v) = vari.0 {
+                                                                            let mut decreased = Expr::op(&args[vari.1.clone()], Op::Lt, v);
+                                                                            decreased = fix_span(decreased, v.span);
+                                                                            pre = Expr::op(&pre, Op::And, &decreased);
+                                                                        }
+                                                                        
 
-                                                                    for i in 0..args.len() {
-                                                                        let expr = input_arg_names[i];
-                                                                        let hash_expr = expr;
-                                                                    //ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string())
-                                                                        pre = pre.subst(|x| x.is_ident(&expr.name.ident), &hash_expr);
+                                                                        let ensures = method_arc.ensures();
+                                                                        let mut post = ensures
+                                                                            .cloned()
+                                                                            .reduce(|a, b| a & b)
+                                                                            .unwrap_or(Expr::bool(true));
+
+                                                                            
+                                                                        // here we substitute the variables used in requires/ensures
+                                                                        // so that we don't have name mismatching.
+                                                                        // example:
+                                                                        // method test(n: Int, m: Int)
+                                                                        // requires n + n + m = 0
+                                                                        // ensures m > 0
+                                                                        for i in 0..input_arg_names.len() {
+                                                                            let o_name = input_arg_names[i].name.ident.clone();
+                                                                            input_arg_names[i].name.ident = input_arg_names[i].name.ident.postfix(&random_string());
+                                                                            let mut expr = Expr::ident(&input_arg_names[i].name.ident, &input_arg_names[i].ty.1);
+                                                                            expr.span = input_arg_names[i].ty.0;
+                                                                            pre = pre.subst_ident(&o_name, &expr);
+                                                                            post = post.subst_ident(&o_name, &expr);
+                                                                        }
+                                                                        let mut mut_args = args.clone();
+                                                                        let mut assigns = Vec::new();
+                                                                        for i in 0..args.len() {
+                                                                            //for i in range(len(args)) 
+                                                                                //let randLetters() = args[i] (make assign)
+                                                                                //args[i] -> a_new (use new var)
+                                                                            // x = inc(x+1)
+                                                                            // a = x+1
+                                                                            // x = inc(a)
+                                                                            //&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()
+                                                                            let new_name = Name { span: args[i].span, ident: Ident(random_string()) };
+                                                                            let assign = IVLCmd::assign(&new_name, &args[i]);
+                                                                            assigns.push(assign);
+                                                                            let new_expr = Expr::ident(&new_name.ident, &args[i].ty);
+                                                                            mut_args[i] = new_expr;
+                                                                        }
+
+                                                                        for i in 0..mut_args.len() {
+                                                                            let expr = input_arg_names[i].clone();
+                                                                            pre = pre.subst_ident(&expr.name.ident, &mut_args[i]);
+                                                                            post = post.subst_ident(&expr.name.ident, &mut_args[i]);
+                                                                        }
+                                                                        let mut havoc = IVLCmd::nop();
+                                                                        if let Some(name_acc) = name {
+                                                                            if let Some((_, ty)) = &method_arc.return_ty {
+                                                                                let mut name_expr = Expr::ident(&name_acc.  ident, &ty);
+                                                                                name_expr.span = name_acc.span;
+                                                                                post = post.subst_result(&name_expr);
+                                                                                havoc = IVLCmd::assign(&name_acc, &Expr::ident(&name_acc.ident.postfix(&random_string()), &ty))
+                                                                            }
+                                                                        }
+                                                                        pre = fix_span(pre, Span::from_start_end(fun_name.span.start(), cmd.span.end()));
+                                                                        let assert_pre = IVLCmd::assert(&pre, "Precondition of method might not hold");
+                                                                        let assume_post = IVLCmd::assume(&post);
+                                                                        let call_part = IVLCmd::seq(&assert_pre, &IVLCmd::seq(&havoc, &assume_post));
+                                                                        Ok(IVLCmd::seq(&IVLCmd::seqs(&assigns), &call_part))
+                                                                    } else {
+                                                                        Ok(IVLCmd::assert(&Expr::bool(false), "Method doesn't exists - L?"))
                                                                     }
-
-                                                                    for i in 0..args.len() {
-                                                                        pre = pre.subst(|x| x.is_ident(&input_arg_names[i].name.ident), &args[i]);
-                                                                    }
-                                                                    
-
-                                                                    let ensures = meth.ensures();
-                                                                    let post = ensures
-                                                                        .cloned()
-                                                                        .reduce(|a, b| a & b)
-                                                                        .unwrap_or(Expr::bool(true));
-                                                                    
-                                                                    
-                                                                    //println!("first {:#?}", first);
-                                                                    //println!("second {:#?}", second);
-                                                                    //MethodRef->Ref->Resolved(.., Weak<Items>)->Items->methods har muligvis alle metoder i programmet i runtime
-                                                                    println!("method {:#?}", method);
-                                                                    
-                                                                    Ok(IVLCmd::nop())
                                                                     },
         any => todo!(" Not supported (yet) in IVLCmd. {:#?}", any),
     }
@@ -315,7 +376,7 @@ fn fix_span(mut expr_in: Expr, span: Span) -> Expr {
 use rand::distributions::{Alphanumeric, DistString};
 fn find_assignments(cmd: &Cmd) -> IVLCmd {
     match &cmd.kind {                              // Same as havoc
-        CmdKind::Assignment     {name, expr}    => IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
+        CmdKind::Assignment     {name, expr}    => IVLCmd::assign(name, &Expr::ident(&name.ident.postfix(&random_string()), &expr.ty)),
         CmdKind::Seq            (cmd1, cmd2)    => IVLCmd::seq(&find_assignments(cmd1), &find_assignments(cmd2)),
         CmdKind::Match          { body }        => {let mut out = IVLCmd::nop();
                                                     for case in body.cases.iter() {
@@ -335,9 +396,13 @@ fn find_assignments(cmd: &Cmd) -> IVLCmd {
 //Is not used
 fn find_readings(expr: &Expr) -> IVLCmd {
     match &expr.kind {                              // Same as havoc
-        ExprKind::Ident(ident)      => IVLCmd::assign(&Name {span: expr.span, ident: ident.clone()}, &Expr::ident(&ident.postfix(&Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()), &expr.ty)),
+        ExprKind::Ident(ident)      => IVLCmd::assign(&Name {span: expr.span, ident: ident.clone()}, &Expr::ident(&ident.postfix(&random_string()), &expr.ty)),
         ExprKind::Infix(e1, op, e2) => IVLCmd::seq(&find_readings(e1), &find_readings(e2)),
         ExprKind::Prefix(op, e)     => find_readings(e),
         _                           => IVLCmd::nop()
     }
 } 
+
+fn random_string() -> String {
+    Alphanumeric.sample_string(&mut rand::thread_rng(), 8).to_string()
+}
