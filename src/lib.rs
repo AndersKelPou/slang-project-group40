@@ -74,7 +74,7 @@ impl slang_ui::Hook for App {
             // Get method's body
             let cmd = &m.body.clone().unwrap().cmd;
             // Encode it in IVL
-            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file.clone(), (&m.variant.clone(),&variant_var))?;
+            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file, (&m.variant.clone(),&variant_var))?;
             //println!("Ivl: {}", ivl);
             /*fn adjust_span(mut expr: Expr) -> Expr {
                 if (expr.span.start() > 8) {
@@ -245,11 +245,10 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                             .unwrap_or(Expr::bool(true));
                                                                         
                                                                         
-                                                                        //Little bit of a hack solution. only works for methods with one argument.
                                                                         if let Some(v) = vari.0 {
-                                                                            let mut decreased = Expr::op(&args[vari.1.clone()], Op::Lt, v);
+                                                                            let mut decreased = args[vari.1.clone()].lt(v);
                                                                             decreased = fix_span(decreased, v.span);
-                                                                            pre = Expr::op(&pre, Op::And, &decreased);
+                                                                            pre = pre.and(&decreased);
                                                                         }
                                                                         
 
