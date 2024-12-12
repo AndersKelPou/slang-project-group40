@@ -28,22 +28,22 @@ impl slang_ui::Hook for App {
                 .reduce(|a, b| a & b)
                 .unwrap_or(Expr::bool(true));
 
-            let mut variant_var = 0;
+            let mut variant_var = None;
 
-            if let Some(e) = m.variant.clone() {
-                let mut gte_zero = e.ge(&Expr::num(0));
-                gte_zero = fix_span(gte_zero, e.span);
+            if let Some(V) = m.variant.clone() {
+                let mut gte_zero = V.ge(&Expr::num(0));
+                gte_zero = fix_span(gte_zero, V.span);
                 pre = pre.and(&gte_zero);
-
+                variant_var = Some(V);
                 //Figure out which input variable is being used in decrease
-                for mut i in 0..m.args.len() {
+                /*for mut i in 0..m.args.len() {
                     let x = m.args[i].clone();
                     if let Some(iden) = e.as_ident() {
                         if x.name.ident.eq(iden) {
                             variant_var = i;
                         }
                     }
-                }
+                }*/
             }
             
             // Convert the expression into an SMT expression
@@ -74,8 +74,8 @@ impl slang_ui::Hook for App {
             // Get method's body
             let cmd = &m.body.clone().unwrap().cmd;
             // Encode it in IVL
-            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file, (&m.variant.clone(),&variant_var))?;
-            //println!("Ivl: {}", ivl);
+            let ivl = cmd_to_ivlcmd(cmd, post_correct_spans.clone(), file, &variant_var)?;
+            println!("Ivl: {}", ivl);
             /*fn adjust_span(mut expr: Expr) -> Expr {
                 if (expr.span.start() > 8) {
                     expr.span = Span::from_start_end(expr.span.start() - 8, expr.span.end());
@@ -90,7 +90,7 @@ impl slang_ui::Hook for App {
             //println!("cmd {:#?}", &cmd);
             //println!("ivl {:#?}", &ivl);
             
-            let oblig = swp(&ivl, post_correct_spans)?;
+            let mut oblig = swp(&ivl, post_correct_spans)?;
             //println!("Span {:#?}", Span::default());
             //println!("oblig {:#?}", &oblig);
             // Convert obligation to SMT expression
@@ -103,6 +103,7 @@ impl slang_ui::Hook for App {
             // Loop over expr in oblig 
             //Tror vi skal loopp her
             let mut stop = false;
+            oblig.reverse();
             for mut i in 0..oblig.len() {
                 if (stop) {
                     break;
@@ -153,7 +154,7 @@ impl slang_ui::Hook for App {
 
 // Encoding of (assert-only) statements into IVL (for programs comprised of only
 // a single assertion)
-fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile, vari: (&Option<Expr>,&usize)) -> Result<IVLCmd> {
+fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile, vari: &Option<Expr>) -> Result<IVLCmd> {
     //println!("cmd to ivlcmd {:#?}", &cmd.kind);
     match &cmd.kind {
         CmdKind::Assert         { condition, .. }               => Ok(IVLCmd::assert(condition, "Assert might fail!")),
@@ -171,7 +172,6 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                     let mut all_invariants = Expr::bool(true);
                                                                     for i in 0..invariants.len() {
                                                                         all_invariants = all_invariants.and(&invariants[i]);
-                                                                        //cases.push(cmd_to_ivlcmd(&Cmd::seq((&Cmd::assume(&body.cases[i].condition)), &body.cases[i].cmd))?);
                                                                     }
                                                                     let mut all_condtions = Expr::bool(true);
                                                                     for i in 0..body.cases.len() {
@@ -179,7 +179,6 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                         case_bodies.push(cmd_to_ivlcmd(&body.cases[i].cmd, post.clone(), file, vari)?);
                                                                     }
                                                                     all_condtions = fix_span(all_condtions, all_invariants.span);
-                                                                    //case_bodies = fix_span(case_bodies, all_invariants.span);
                                                                     
                                                                     let havoc_statement = find_assignments(cmd);
 
@@ -243,14 +242,6 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                             .cloned()
                                                                             .reduce(|a, b| a & b)
                                                                             .unwrap_or(Expr::bool(true));
-                                                                        
-                                                                        
-                                                                        if let Some(v) = vari.0 {
-                                                                            let mut decreased = args[vari.1.clone()].lt(v);
-                                                                            decreased = fix_span(decreased, v.span);
-                                                                            pre = pre.and(&decreased);
-                                                                        }
-                                                                        
 
                                                                         let ensures = method_arc.ensures();
                                                                         let mut post = ensures
@@ -258,6 +249,17 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                             .reduce(|a, b| a & b)
                                                                             .unwrap_or(Expr::bool(true));
 
+                                                                        let mut v = Expr::num(1);
+                                                                        let mut subst_V = Expr::num(0);
+                                                                        
+
+                                                                        if let Some(V) = vari {
+                                                                            v = V.clone();
+                                                                            subst_V = V.clone();
+                                                                            
+                                                                            //decreased = fix_span(decreased, V.span);
+                                                                            //pre = pre.and(&decreased);
+                                                                        }
                                                                             
                                                                         // here we substitute the variables used in requires/ensures
                                                                         // so that we don't have name mismatching.
@@ -270,6 +272,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                             input_arg_names[i].name.ident = input_arg_names[i].name.ident.postfix(&random_string());
                                                                             let mut expr = Expr::ident(&input_arg_names[i].name.ident, &input_arg_names[i].ty.1);
                                                                             expr.span = input_arg_names[i].ty.0;
+                                                                            subst_V = subst_V.subst_ident(&o_name, &expr);
                                                                             pre = pre.subst_ident(&o_name, &expr);
                                                                             post = post.subst_ident(&o_name, &expr);
                                                                         }
@@ -292,6 +295,7 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
 
                                                                         for i in 0..mut_args.len() {
                                                                             let expr = input_arg_names[i].clone();
+                                                                            subst_V = subst_V.subst_ident(&expr.name.ident, &mut_args[i]);
                                                                             pre = pre.subst_ident(&expr.name.ident, &mut_args[i]);
                                                                             post = post.subst_ident(&expr.name.ident, &mut_args[i]);
                                                                         }
@@ -304,8 +308,11 @@ fn cmd_to_ivlcmd(cmd: &Cmd, post: Vec<(Expr, String)>, file: &slang::SourceFile,
                                                                                 havoc = IVLCmd::assign(&name_acc, &Expr::ident(&name_acc.ident.postfix(&random_string()), &ty))
                                                                             }
                                                                         }
+                                                                        let decrease = v.gt(&subst_V);
+                                                                        let decrease_assert = IVLCmd::assert(&fix_span(decrease, cmd.span), "Termination messure might not decrease");
                                                                         pre = fix_span(pre, Span::from_start_end(fun_name.span.start(), cmd.span.end()));
-                                                                        let assert_pre = IVLCmd::assert(&pre, "Precondition of method might not hold");
+                                                                        let assert_pre = IVLCmd::seq(&IVLCmd::assert(&pre, "Precondition of method might not hold"),
+                                                                                                     &decrease_assert);
                                                                         let assume_post = IVLCmd::assume(&post);
                                                                         let call_part = IVLCmd::seq(&assert_pre, &IVLCmd::seq(&havoc, &assume_post));
                                                                         Ok(IVLCmd::seq(&IVLCmd::seqs(&assigns), &call_part))
